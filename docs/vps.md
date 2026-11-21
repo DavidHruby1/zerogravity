@@ -1,125 +1,34 @@
 # VPS Deployment Guide
 
-- **Status**: Active
-- **Last validated**: 2026-03-04
-- **Related docs**: [`docker.md`](docker.md), [`api.md`](api.md), [`zg.md`](zg.md), [`index.md`](index.md)
+Run the single-account Compose deployment on the VPS and reach its loopback API through an SSH tunnel. The API key is required for protected routes through the tunnel.
 
-Use this guide to deploy ZeroGravity on a remote Linux VPS with a minimal, secure baseline. The exact package manager, cloud firewall UI, and DNS tooling vary by provider, but the flow below stays the same.
+## On the VPS
 
-## 1) Minimal secure deployment flow
-
-1. **Create a non-root user** (with `sudo`) and disable direct SSH root login.
-2. **Install Docker + Compose plugin** from your distro's official or vendor-supported repository.
-3. **Create a deployment directory** (for example, `/opt/zerogravity`) owned by your deploy user.
-4. **Generate config files**:
+1. Install Docker Engine 28 or later with the Compose and Buildx plugins. Use a non-root deployment user with authorized Docker access.
+2. Place the repository in a directory owned by the deployment user. Follow the [Docker guide](docker.md) there to provision one account file, set the local proxy API key, build the image, and start the service.
+3. Restrict inbound SSH at the provider and host firewalls to your intended client networks. Keep ports 8741 and 443 closed in both firewalls for this setup.
+4. Confirm the API is bound to the VPS loopback address.
 
    ```bash
-   cd /opt/zerogravity
-   zg docker-init
-   ```
-
-5. **Add accounts** (`accounts.json` volume mount, or `ZEROGRAVITY_ACCOUNTS` environment variable).
-6. **Set an API key** (required for remote exposure; see below).
-7. **Start the service**:
-
-   ```bash
-   docker compose up -d
-   ```
-
-8. **Verify health**:
-
-   ```bash
+   docker compose -f docker-compose.example.yml port zerogravity 8741
    curl -fsS http://127.0.0.1:8741/health
    ```
 
-## 2) API key protection (`ZEROGRAVITY_API_KEY`)
+   The port command should print `127.0.0.1:8741`. The health endpoint reports that the process is running.
 
-Set one or more keys in your deployment environment:
+## From the client machine
 
-```bash
-# .env or shell export
-ZEROGRAVITY_API_KEY="replace-with-a-long-random-secret"
-# optional multi-key rotation:
-# ZEROGRAVITY_API_KEY="key-a,key-b,key-c"
-```
-
-Client requests must include one of the supported auth headers:
-
-- `Authorization: Bearer <key>`
-- `x-api-key: <key>`
-- `x-goog-api-key: <key>`
-
-Examples:
+In a terminal, open an SSH tunnel using your VPS user and hostname.
 
 ```bash
-curl https://api.example.com/v1/chat/completions \
-  -H "Authorization: Bearer $ZEROGRAVITY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gemini-3-flash","messages":[{"role":"user","content":"hello"}]}'
-
-curl https://api.example.com/v1/messages \
-  -H "x-api-key: $ZEROGRAVITY_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"opus-4.6","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+ssh -NT -o ExitOnForwardFailure=yes \
+  -L 127.0.0.1:8741:127.0.0.1:8741 deploy@vps.example.com
 ```
 
-## 3) Firewall posture
-
-At both VPS firewall and host firewall layers:
-
-- **Allow inbound only the intended public API port** (for example `443` if behind TLS reverse proxy, or `8741` for direct HTTP).
-- **Restrict SSH** (`22`) to your admin IP ranges.
-- **Do not expose admin/sensitive ports** publicly (`2375/2376` Docker API, database ports, metrics/debug ports, etc.).
-- **Allow established outbound traffic** so the proxy can reach upstream services.
-
-If possible, bind internal-only services to loopback (`127.0.0.1`) and publish only the single entrypoint port.
-
-## 4) Reverse proxy + TLS termination options
-
-For public internet access, terminate HTTPS in front of ZeroGravity using any standard reverse proxy (Nginx, Caddy, Traefik, HAProxy, cloud LB, etc.):
-
-- Listener on `443` with a valid certificate.
-- Proxy upstream to `http://127.0.0.1:8741`.
-- Preserve request bodies and streaming responses.
-- Forward common headers (`Host`, `X-Forwarded-For`, `X-Forwarded-Proto`).
-
-If you keep ZeroGravity on plain HTTP internally, ensure only the reverse proxy can reach port `8741`.
-
-## 5) Healthcheck and restart policy
-
-Use `restart: unless-stopped` and a `/health` probe in Compose:
-
-```yaml
-services:
-  zerogravity:
-    image: ghcr.io/nikketryhard/zerogravity:latest
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8741:8741"
-    environment:
-      - ZEROGRAVITY_API_KEY=${ZEROGRAVITY_API_KEY}
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8741/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-```
-
-This gives automatic restart after reboot/crash and a reliable readiness signal for orchestration or external monitoring.
-
-## 6) Claude Code remote endpoint example
-
-When using Anthropic-compatible clients from your laptop/workstation, point to your remote ZeroGravity endpoint instead of localhost.
+In a second terminal, check the tunneled endpoint.
 
 ```bash
-export ANTHROPIC_BASE_URL="https://api.example.com"
-export ANTHROPIC_AUTH_TOKEN="replace-with-your-zerogravity-api-key"
+curl -fsS http://127.0.0.1:8741/health
 ```
 
-Then run Claude Code normally. Requests go to:
-
-- `POST $ANTHROPIC_BASE_URL/v1/messages`
-- Auth via `x-api-key: $ANTHROPIC_AUTH_TOKEN`
-
-If you run without TLS (not recommended on public networks), use `http://<vps-ip>:8741` only behind strict firewall/IP allowlists.
+Configure Claude Code with `http://127.0.0.1:8741` and the API key from the VPS. Keep the SSH terminal open while using the client. If port 8741 is already in use on the client machine, change the first port in `-L` and use that port in the client URL. [Claude Code configuration](clients.md#claude-code)

@@ -1,5 +1,7 @@
 # Build
 /target/
+__pycache__/
+/.git-local/
 
 # IDE
 .idea/
@@ -11,9 +13,12 @@
 .DS_Store
 Thumbs.db
 
-# Env
-.env
+# Local configuration and credentials
+*.env
+*.env.*
+*accounts*.json*
 *.pem
+*.key
 zerogravity/
 .ace-tool/
 AgentLogs/

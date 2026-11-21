@@ -1,147 +1,78 @@
 # Docker Guide
 
-- **Status**: Active
-- **Last validated**: 2026-03-03
-- **Related docs**: [`index.md`](index.md), [`vps.md`](vps.md), [`api.md`](api.md), [`zg.md`](zg.md), [`../index.md`](../index.md)
+The checked-in Compose example runs ZeroGravity v1.4.2 with one account and publishes the API at `http://127.0.0.1:8741`. The Dockerfile bundles the backend for Linux AMD64 and ARM64. Use Docker Engine 28 or later with the Compose and Buildx plugins. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 
-The proxy runs as a Docker container. The image bundles all required backend components — no Antigravity installation needed on the host.
+## Prepare the local configuration
 
-## Quick Start
+From the repository root, place your existing authorized account file at `./accounts.json`. The `accounts` array must contain exactly one enabled account with an email and a refresh token. If present, `disabled` must be `false` and `alias` must be a string or null. If the file specifies an `active` account, use that same email. If it contains an `extracted_at` value, use its original RFC 3339 timestamp.
 
-```bash
-# Generate docker-compose.yml + accounts.json template
-zg docker-init
+The startup check reads the source file through a read-only mount and creates a private copy on a dedicated in-memory filesystem. ZeroGravity v1.4.2 uses both metadata fields when loading the account. If either field is missing, the copy uses the sole email as `active` and the current UTC load time as `extracted_at`. The recorded load time applies only to the copy. Upgrades replace an empty placeholder left by the previous bind mount. If the config volume contains an actual `accounts.json` file, move it aside before starting the new profile.
 
-# Start the proxy
-docker compose up -d
-
-# Verify
-curl http://localhost:8741/health
-```
-
-## Docker Compose
-
-The `zg docker-init` command generates a ready-to-use `docker-compose.yml`:
-
-```yaml
-services:
-  zerogravity:
-    container_name: zerogravity
-    image: ghcr.io/nikketryhard/zerogravity:latest
-    restart: unless-stopped
-    ports:
-      - "8741:8741"
-      - "443:443"
-    volumes:
-      - ./accounts.json:/root/.config/zerogravity/accounts.json
-      - ./aliases.json:/root/.config/zerogravity/aliases.json
-    environment:
-      - ZEROGRAVITY_API_KEY=${ZEROGRAVITY_API_KEY:-}
-      - ZEROGRAVITY_OS=${ZEROGRAVITY_OS:-}
-      - ZEROGRAVITY_IDE_VERSION=${ZEROGRAVITY_IDE_VERSION:-}
-      - ZEROGRAVITY_DEVICE_FINGERPRINT=${ZEROGRAVITY_DEVICE_FINGERPRINT:-}
-      - RUST_LOG=info
-```
-
-> To use environment variables for accounts instead of a volume mount, remove the `volumes` section from your `docker-compose.yml` and update the `environment` section to include `ZEROGRAVITY_ACCOUNTS`:
-> ```yaml
-> environment:
->   - ZEROGRAVITY_ACCOUNTS=user1@gmail.com:1//token1,user2@gmail.com:1//token2
->   - ZEROGRAVITY_API_KEY=${ZEROGRAVITY_API_KEY:-}
->   - ZEROGRAVITY_OS=${ZEROGRAVITY_OS:-}
->   - ZEROGRAVITY_IDE_VERSION=${ZEROGRAVITY_IDE_VERSION:-}
->   - ZEROGRAVITY_DEVICE_FINGERPRINT=${ZEROGRAVITY_DEVICE_FINGERPRINT:-}
->   - RUST_LOG=info
-> ```
-> Comma-separate multiple accounts for automatic rotation on rate limit.
-
-## Docker Run (Alternative)
-
-**With accounts.json:**
+Generate a new proxy API key with OpenSSL. This command creates `.env` with restricted permissions and preserves any existing file.
 
 ```bash
-docker run -d --name zerogravity \
-  -p 8741:8741 \
-  -v ./accounts.json:/root/.config/zerogravity/accounts.json \
-  ghcr.io/nikketryhard/zerogravity:latest
+(
+  umask 077
+  set -C
+  key=$(openssl rand -hex 32) &&
+    printf 'ZEROGRAVITY_API_KEY=%s\n' "$key" > .env
+)
+chmod 600 .env accounts.json
 ```
 
-**With env var (single account):**
+For an existing `.env`, set `ZEROGRAVITY_API_KEY` to a single printable ASCII key without spaces or commas. Compose also accepts the key from your shell environment, which takes precedence over `.env`. Both local files are ignored by Git and excluded from the Docker build context. Keep them private and use `config --quiet` to validate the setup without displaying the key.
+
+## Build and start
 
 ```bash
-docker run -d --name zerogravity \
-  -p 8741:8741 \
-  -e ZEROGRAVITY_ACCOUNTS="user@gmail.com:1//refresh_token" \
-  ghcr.io/nikketryhard/zerogravity:latest
+docker compose -f docker-compose.example.yml config --quiet
+docker compose -f docker-compose.example.yml build
+docker compose -f docker-compose.example.yml up -d --wait
+curl -fsS http://127.0.0.1:8741/health
 ```
 
-**With env var (multiple accounts — comma-separated, auto-rotates on rate limit):**
+The example builds `zerogravity:v1.4.2-local` from the checked-in Dockerfile and runs that local image. Compose refuses a missing or empty API key. A startup check validates the key and the structure of the mounted account file before launching ZeroGravity. The `/health` route reports whether the proxy is running. Validate account refresh, model access, and streaming separately. See the [API authentication reference](api.md#api-key-protection) and the [Claude Code configuration](clients.md#claude-code).
 
-```bash
-docker run -d --name zerogravity \
-  -p 8741:8741 \
-  -e ZEROGRAVITY_ACCOUNTS="user1@gmail.com:1//token1,user2@gmail.com:1//token2" \
-  ghcr.io/nikketryhard/zerogravity:latest
+The API key is available to users with Docker inspection access. Keep rendered Compose configurations and container inspection output private.
+
+If Compose returns early during a restart, `docker compose -f docker-compose.example.yml ps` shows the current container state. With the proxy key exported, `python3 scripts/check_proxy.py status --wait-ready 90` measures recovery of the local API and managed account without sending a generation request. [Client diagnostics](clients.md#diagnosing-a-single-account-session)
+
+## Test the newer backend
+
+The default image pairs the v1.4.2 proxy with the 1.18.3 IDE language server. To build the optional 1.20.6 backend under its own local tag and check it with synthetic credentials, run these commands from the repository root. The smoke test requires Docker Compose 2.24.4 or later and `jq`. It runs with networking disabled, including during the restart check.
+
+```sh
+ZEROGRAVITY_BACKEND=1.20.6 docker compose -f docker-compose.example.yml build
+sh tests/image-smoke.sh zerogravity:v1.4.2-1.20.6
 ```
 
-## Volumes
+The build verifies the architecture-specific SHA-256 for the Google package, proxy, CLI and shared library. To select the candidate for subsequent Compose commands, set `ZEROGRAVITY_BACKEND=1.20.6` in the deployment's `.env` and recreate the service. Remove that setting and recreate the service to return to the default image. For tested versions and image digests, see the [fork audit](analysis.md#výsledek-úprav-ve-forku).
 
-| Host Path         | Container Path                               | Purpose                          |
-| ----------------- | -------------------------------------------- | -------------------------------- |
-| `./accounts.json` | `/root/.config/zerogravity/accounts.json` | Multi-account rotation (primary) |
-| `./aliases.json`  | `/root/.config/zerogravity/aliases.json:ro`  | Custom model name aliases        |
+## Request Queue
 
-## Environment Variables
+The Compose example sets `ZEROGRAVITY_QUOTA_CAP=0` to disable quota-triggered account rotation. It enables the request queue and sets these limits for one account.
 
-| Variable                      | Default                 | Description                                          | Example                     |
-| ----------------------------- | ----------------------- | ---------------------------------------------------- | --------------------------- |
-| `ZEROGRAVITY_ACCOUNTS`        | —                       | Inline accounts — `email:refresh_token`, comma-separated for multiple | `user1@gmail.com:1//0abc...,user2@gmail.com:1//0xyz...` |
-| `ZEROGRAVITY_TOKEN`           | —                       | Single OAuth access token — expires in 60min         | `ya29.a0ARrdaM...`          |
-| `ZEROGRAVITY_API_KEY`         | —                       | Protect proxy from unauthorized access               | `my-secret-key`             |
-| `ZEROGRAVITY_UPSTREAM_PROXY`  | —                       | Route outbound traffic through a proxy               | `socks5://127.0.0.1:1080`   |
-| `ZEROGRAVITY_HTTP_PROXY`      | —                       | Pass HTTP/HTTPS corporate proxy settings to the backend child process | `http://proxy.internal:8080` |
-| `ZEROGRAVITY_LS_PATH`         | Auto-detected           | Path to backend binary (set automatically in Docker) | `/usr/local/bin/language_server_linux_x64` |
-| `ZEROGRAVITY_CONFIG_DIR`      | `~/.config/zerogravity` | Config directory                                     | `/etc/zerogravity`          |
-| `ZEROGRAVITY_DATA_DIR`        | `/tmp/.agcache`         | Backend data directory                               | `/var/lib/zerogravity`      |
-| `ZEROGRAVITY_APP_ROOT`        | Auto-detected           | Antigravity app root directory                       | `/opt/antigravity`          |
-| `ZEROGRAVITY_STATE_DB`        | Auto-detected           | Path to Antigravity's state database                 | `/path/to/state.vscdb`      |
-| `ZEROGRAVITY_LS_USER`         | `zerogravity-ls`        | System user for process isolation (Linux)            | `nobody`                    |
-| `ZEROGRAVITY_MACHINE_ID_PATH` | Auto-detected           | Path to Antigravity's machine ID file                | `/path/to/machineid`        |
-| `ZEROGRAVITY_OS`              | Auto-detected           | Override reported OS label (`Linux`, `macOS`, `Windows`) | `Windows`                 |
-| `ZEROGRAVITY_IDE_VERSION`     | Auto-detected           | Preferred override for reported IDE version          | `1.19.4`                    |
-| `ZEROGRAVITY_CLIENT_VERSION`  | Auto-detected           | Override the client version string                   | `1.15.8`                    |
-| `ZEROGRAVITY_DEVICE_FINGERPRINT` | Auto-detected         | Override reported device fingerprint (UUID required) | `11111111-2222-4333-8444-555555555555` |
-| `ZEROGRAVITY_API_BODY_LIMIT_MB` | `32` (clamped `1..100`) | Max request body size in MiB for API routes (`/v1/*`) | `64`                       |
-| `SSL_CERT_FILE`               | System default          | Custom CA certificate bundle path                    | `/etc/ssl/certs/ca.pem`     |
-| `RUST_LOG`                    | `warn` (runtime default) / `info` (`zg docker-init` template) | Log level | `debug`                     |
-| `ZEROGRAVITY_DOH`             | `0` (disabled)          | Enable DNS-over-HTTPS via dns.google (`1` to enable)  | `1`                         |
-| `ZEROGRAVITY_STREAM_IDLE_TIMEOUT_SECS` | `120`          | Stream idle timeout in seconds before closing          | `300`                       |
+| Variable | Compose value | Behavior |
+| --- | --- | --- |
+| `ZEROGRAVITY_QUEUE_ENABLED` | `true` | Enable queueing |
+| `ZEROGRAVITY_QUEUE_CONCURRENCY` | `1` | Maximum concurrent generation requests |
+| `ZEROGRAVITY_QUEUE_INTERVAL_MS` | `500` | Minimum interval between dispatches in milliseconds |
+| `ZEROGRAVITY_QUEUE_TIMEOUT_MS` | `30000` | Maximum queue wait in milliseconds before HTTP 408 |
+| `ZEROGRAVITY_QUEUE_MAX_SIZE` | `4` | Maximum queue depth before HTTP 503 |
 
-### Customization
-
-| Variable                      | Default   | Description                                                              | Example                                |
-| ----------------------------- | --------- | ------------------------------------------------------------------------ | -------------------------------------- |
-| `ZEROGRAVITY_QUOTA_CAP`       | `0.2`     | Per-account quota usage cap (0.0–1.0), triggers rotation. `0` to disable | `0.5`                                  |
-| `ZEROGRAVITY_SYSTEM_MODE`     | `native`  | `native` = preserve AG request, translate tools; `stealth` = strip AG identity, inject client tools; `minimal` = replace 20KB prompt entirely | `native` |
-| `ZEROGRAVITY_SENSITIVE_WORDS` | built-in  | Comma-separated client names to obfuscate, or `none` to disable          | `Cursor,Windsurf`                      |
-| `ZEROGRAVITY_MODEL_ALIASES`   | —         | Map custom model names to internal models                                | `gpt-4o:gemini-3-flash,gpt-4:opus-4.6` |
-| `ZEROGRAVITY_DISPATCH_HOOKS` | `false`   | Enable dispatch timing diagnostics (1/true/on to enable)                 | `true`                                 |
-
-### Request Queue
-
-Serializes generation requests to prevent thundering-herd failures when multiple clients hit the proxy simultaneously.
-
-| Variable                        | Default  | Description                                                | Example  |
-| ------------------------------- | -------- | ---------------------------------------------------------- | -------- |
-| `ZEROGRAVITY_QUEUE_ENABLED`     | `true`   | Set to `false`, `0`, or `no` to disable the queue entirely | `false`  |
-| `ZEROGRAVITY_QUEUE_CONCURRENCY` | `2`      | Max concurrent requests to Google                          | `4`      |
-| `ZEROGRAVITY_QUEUE_INTERVAL_MS` | `0`      | Anti-burst gap between consecutive requests (ms)           | `500`    |
-| `ZEROGRAVITY_QUEUE_TIMEOUT_MS`  | `600000` | Max wait time in queue before HTTP 408                     | `300000` |
-| `ZEROGRAVITY_QUEUE_MAX_SIZE`    | `50`     | Max queue depth; excess requests get HTTP 503              | `100`    |
+Queue wait is distinct from the time to the first response event and the idle timeout during a stream. The default stream idle timeout is 120 seconds and can be set with `ZEROGRAVITY_STREAM_IDLE_TIMEOUT_SECS`.
 
 ## Updating
 
+Rebuild whenever you change the checked-in Dockerfile. Record the built image ID when reporting a result with `docker image inspect zerogravity:v1.4.2-local --format '{{.Id}}'`.
+
 ```bash
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.example.yml build
+docker compose -f docker-compose.example.yml up -d --wait
+```
+
+If you replace the bind-mounted account file, recreate the container to load the replacement.
+
+```bash
+docker compose -f docker-compose.example.yml up -d --force-recreate --wait
 ```

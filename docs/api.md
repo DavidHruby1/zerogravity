@@ -2,7 +2,7 @@
 
 - **Status**: Active
 - **Last validated**: 2026-03-03
-- **Related docs**: [`README.md`](README.md), [`clients.md`](clients.md), [`docker.md`](docker.md), [`zg.md`](zg.md), [`../index.md`](../index.md)
+- **Related docs**: [`README.md`](README.md), [`clients.md`](clients.md), [`docker.md`](docker.md), [`zg.md`](zg.md), [`index.md`](index.md)
 
 The proxy runs on `http://localhost:8741` by default.
 
@@ -15,7 +15,7 @@ For cross-client operational guidance (Claude Code, OpenCode, OpenAI-compatible,
 **Chat Completions:**
 
 ```bash
-curl http://localhost:8741/v1/chat/completions \
+curl http://localhost:8741/v1/chat/completions -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-3-flash",
@@ -27,7 +27,7 @@ curl http://localhost:8741/v1/chat/completions \
 **Responses API:**
 
 ```bash
-curl http://localhost:8741/v1/responses \
+curl http://localhost:8741/v1/responses -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "opus-4.6",
@@ -40,7 +40,7 @@ curl http://localhost:8741/v1/responses \
 **Messages API:**
 
 ```bash
-curl http://localhost:8741/v1/messages \
+curl http://localhost:8741/v1/messages -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -H "anthropic-version: 2023-06-01" \
   -d '{
@@ -53,7 +53,7 @@ curl http://localhost:8741/v1/messages \
 ### Gemini-compatible
 
 ```bash
-curl http://localhost:8741/v1beta/models/gemini-3-flash:generateContent \
+curl http://localhost:8741/v1beta/models/gemini-3-flash:generateContent -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "contents": [{"parts": [{"text": "hello"}]}]
@@ -63,7 +63,7 @@ curl http://localhost:8741/v1beta/models/gemini-3-flash:generateContent \
 ## Models
 
 ```bash
-curl http://localhost:8741/v1/models
+curl http://localhost:8741/v1/models -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 Returns the list of available built-in models.
@@ -93,17 +93,19 @@ Image URLs are included in model responses — no configuration needed.
 ## Search (WIP)
 
 ```bash
-curl http://localhost:8741/v1/search?q=latest+news
+curl http://localhost:8741/v1/search?q=latest+news -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 Web search powered by Google grounding. Still work in progress.
 
 ## Account Management
 
+In the fork's single-account Compose profile, change the host `accounts.json` and recreate the container to persist an account change. The API commands below operate on the runtime configuration. Startup regenerates that configuration from the host file. [Docker guide](docker.md#updating)
+
 ### Add Account
 
 ```bash
-curl -X POST http://localhost:8741/v1/accounts \
+curl -X POST http://localhost:8741/v1/accounts -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com", "refresh_token": "1//0fXXX"}'
 ```
@@ -111,13 +113,13 @@ curl -X POST http://localhost:8741/v1/accounts \
 ### List Accounts
 
 ```bash
-curl http://localhost:8741/v1/accounts
+curl http://localhost:8741/v1/accounts -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 ### Remove Account
 
 ```bash
-curl -X DELETE http://localhost:8741/v1/accounts \
+curl -X DELETE http://localhost:8741/v1/accounts -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com"}'
 ```
@@ -127,7 +129,7 @@ curl -X DELETE http://localhost:8741/v1/accounts \
 Switches the active account immediately without restarting the proxy process manually.
 
 ```bash
-curl -X POST http://localhost:8741/v1/accounts/set_active \
+curl -X POST http://localhost:8741/v1/accounts/set_active -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com"}'
 ```
@@ -135,7 +137,7 @@ curl -X POST http://localhost:8741/v1/accounts/set_active \
 ### Account Status
 
 ```bash
-curl http://localhost:8741/v1/accounts/status
+curl http://localhost:8741/v1/accounts/status -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 Returns per-account details including email, active flag, and quota usage breakdown.
@@ -161,7 +163,7 @@ Use `--quota-cap 0.2` (default) or set `ZEROGRAVITY_QUOTA_CAP=0.2` to rotate pro
 ### Set Token at Runtime
 
 ```bash
-curl -X POST http://localhost:8741/v1/token \
+curl -X POST http://localhost:8741/v1/token -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"token": "ya29.xxx"}'
 ```
@@ -173,7 +175,7 @@ curl -X POST http://localhost:8741/v1/token \
 ### Usage
 
 ```bash
-curl http://localhost:8741/v1/usage
+curl http://localhost:8741/v1/usage -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 Returns token counts persisted by the proxy, including stats restored across restarts.
@@ -181,7 +183,7 @@ Returns token counts persisted by the proxy, including stats restored across res
 ### Quota
 
 ```bash
-curl http://localhost:8741/v1/quota
+curl http://localhost:8741/v1/quota -H "x-api-key: $ZEROGRAVITY_API_KEY"
 ```
 
 Returns per-model quota limits and current usage from the backend.
@@ -192,12 +194,12 @@ Returns per-model quota limits and current usage from the backend.
 curl http://localhost:8741/health
 ```
 
-Returns `200 OK` when the proxy is running.
+Returns `200 OK` when the proxy is running. To check whether the runtime loaded one managed account and selected it, query both account endpoints. See the [single-account checks](clients.md#diagnosing-a-single-account-session).
 
 ### Raw Replay
 
 ```bash
-curl -X POST http://localhost:8741/v1/replay/raw \
+curl -X POST http://localhost:8741/v1/replay/raw -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   --data-binary @modified_request.json
 ```
@@ -248,17 +250,17 @@ Inject fake runtime state for an account to test rotation selection, quota behav
 
 ```bash
 # Mark an account as banned
-curl -X POST http://localhost:8741/v1/debug/simulate \
+curl -X POST http://localhost:8741/v1/debug/simulate -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com", "banned": true}'
 
 # Simulate quota exhaustion (triggers rotation on next request)
-curl -X POST http://localhost:8741/v1/debug/simulate \
+curl -X POST http://localhost:8741/v1/debug/simulate -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com", "remaining_fraction": 0.0, "cooldown_secs": 3600}'
 
 # Clear a ban and restore quota
-curl -X POST http://localhost:8741/v1/debug/simulate \
+curl -X POST http://localhost:8741/v1/debug/simulate -H "x-api-key: $ZEROGRAVITY_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@gmail.com", "banned": false, "remaining_fraction": 1.0}'
 ```

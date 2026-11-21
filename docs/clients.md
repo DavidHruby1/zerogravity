@@ -4,26 +4,50 @@ Use this page as the operator-facing source of truth for client-specific behavio
 
 ## Claude Code
 
-- **Supported endpoint style:** Anthropic-compatible (`/v1/messages`, optional `/v1/messages/count_tokens`) via `ANTHROPIC_BASE_URL`.
-- **Proxy-side transformations that affect UX:**
-  - Anthropic request/response shape is translated to/from Gemini-backed upstream calls.
-  - `budget_tokens` values are mapped to Gemini thinking levels for Claude aliases (`opus-4.6`, `sonnet-4.6`).
-  - Generation requests still pass through global queue controls (`ZEROGRAVITY_QUEUE_*`) and may wait under load.
-  - Missing `max_tokens` gets a proxy default (64k, with internal minimum enforcement).
-- **Recommended defaults:**
-  - Keep models on published aliases (`opus-4.6`, `sonnet-4.6`) instead of ad-hoc names.
-  - Set realistic `max_tokens` and keep prompts compact to reduce queue time and context pressure.
-  - Keep the default queue enabled for shared/team usage.
-- **Anti-patterns:**
-  - Disabling queue in multi-client environments.
-  - Sending giant attachments/history blobs near API body limits.
-  - Treating `budget_tokens` as exact output control (it is a thinking-level signal after mapping).
-- **Troubleshooting checklist (429/503/capacity/context):**
-  - Confirm `/health` is healthy and account status is not exhausted.
-  - Check queue saturation (`ZEROGRAVITY_QUEUE_MAX_SIZE`, timeout settings).
-  - For repeated 429s, verify multi-account rotation and quota cap config.
-  - For 503 capacity errors, retry with backoff and/or switch to a less constrained model.
-  - For context/body errors, trim history, tool output, and uploaded content size.
+The local deployment accepts Anthropic Messages at `http://127.0.0.1:8741/v1/messages`. Set the base URL to the **origin** and use the proxy's API key. Use the same `ZEROGRAVITY_API_KEY` as Compose. If the key is only in the deployment's `.env`, read it from the running local service into your shell from the repository root.
+
+```sh
+ZEROGRAVITY_API_KEY=$(docker compose -f docker-compose.example.yml exec -T zerogravity printenv ZEROGRAVITY_API_KEY)
+export ZEROGRAVITY_API_KEY
+```
+
+Start Claude Code with the local endpoint.
+
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8741
+export ANTHROPIC_AUTH_TOKEN="${ZEROGRAVITY_API_KEY:?Set the local proxy API key}"
+export CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1
+export CLAUDE_CODE_MAX_RETRIES=0
+claude --model sonnet-4.6
+```
+
+With non-streaming fallback disabled, Claude Code 2.1.330 still resent a byte-identical streaming request after a connection closed mid-stream under its default retry settings. Setting `CLAUDE_CODE_MAX_RETRIES=0` stopped that replay in the fixture. This also disables the client's automatic recovery from a transient 503. The binary proxy has its own upstream retry behavior. [Claude Code environment variables](https://code.claude.com/docs/en/env-vars)
+
+Google lists using an Antigravity login with third-party clients, including Claude Code, as grounds for account suspension. [Google FAQ](https://antigravity.google/docs/faq)
+
+### Diagnosing a single-account session
+
+| Observation | What to check |
+| --- | --- |
+| Healthy process, empty account list or no active account | Check the file bind mount and the account manager before sending generation requests. A short-lived access token can make an initial chat succeed. A successful renewal across an expiry boundary is stronger evidence than a listed account. |
+| HTTP 401 | Check the local API key first. For an upstream 401, v1.4.2 documents a reactive access-token refresh. Correlate the upstream response and refresh outcome in local logs. |
+| HTTP 403 | Preserve the provider's reason. If it explicitly disables service for this account, stop the operation and all model fallbacks. Other permission errors require their own diagnosis. |
+| HTTP 408 or 503 before output | Compare queue depth and wait time with model capacity errors and backend restart logs. Record the time until the first subsequent successful request. |
+| Timeout, 504 or disconnect after output begins | Record the last complete event and stop. Replaying can duplicate text or a tool action. |
+| A tool fails on the next turn | Check the actual `tool_use` event, its name, structured arguments, and the matching `tool_use_id` in the next user message. A text block containing JSON cannot invoke a tool. |
+
+Run these from the repository root. The status check reads local API state. The stream check sends generation requests and can consume quota.
+
+```sh
+python3 scripts/check_proxy.py status
+python3 scripts/check_proxy.py stream --model sonnet-4.6
+```
+
+After a restart, `python3 scripts/check_proxy.py status --wait-ready 60` measures how long it takes to observe a healthy API and an active managed account. A successful generation or tool check establishes that the language server can handle requests.
+
+Record the image digest, platform, backend version and Claude Code version with the result. For a freeze, correlate client timings with the local queue and backend logs. Count upstream attempts per client operation across retries and model fallbacks. HTTP timings alone cannot reveal the time spent in the queue or the number of upstream attempts.
+
+The opt-in fixture test runs Claude Code against a synthetic API on Docker loopback with external networking disabled and a synthetic key. From the repository root, run `sh tests/claude-code.sh /path/to/claude` with Go, a native Linux Claude Code executable, and a built `zerogravity:v1.4.2-local` image on the same architecture. Pass another local image as the second argument. The test checks two `Read` calls, an explicit 403, an SSE error after text, an interrupted HTTP transfer with and without client retries, and recovery from two 503 responses at the default retry setting.
 
 ## OpenCode
 
@@ -83,7 +107,7 @@ Use this page as the operator-facing source of truth for client-specific behavio
 - **Recommended defaults:**
   - Keep model IDs on supported aliases and pin known-good defaults in client config.
   - Use bounded `max_tokens` and moderate thinking budgets.
-  - Keep retry policy enabled with exponential backoff.
+  - Bound retries to transient failures before any stream output.
 - **Anti-patterns:**
   - Over-relying on huge `budget_tokens` values for quality gains.
   - Treating every 503 as proxy failure (capacity exhaustion is often upstream).
@@ -91,6 +115,6 @@ Use this page as the operator-facing source of truth for client-specific behavio
 - **Troubleshooting checklist (429/503/capacity/context):**
   - Validate `ANTHROPIC_BASE_URL` and authentication header format.
   - Check `/v1/accounts/status` and `/v1/quota` for exhaustion/cooldown clues.
-  - Retry 503 capacity errors with backoff or shift to a lighter model.
+  - For a confirmed transient capacity error before any output, honor the cooldown and use bounded backoff.
   - Trim conversation/tool history when context limits are hit.
 

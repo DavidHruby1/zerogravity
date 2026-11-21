@@ -1,6 +1,7 @@
 name: Safety Check
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -45,3 +46,55 @@ jobs:
             exit 1
           fi
           echo "README is clean"
+
+      - name: Check tracked files for local account data
+        run: |
+          if git ls-files | grep -Ei '(^|/)([^/]*accounts[^/]*\.json([^/]*)?|\.env(\..+)?|[^/]+\.(key|pem))$'; then
+            echo "::error::Local account or credential file is tracked"
+            exit 1
+          fi
+
+  single-account-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise startup validation with synthetic credentials
+        run: sh tests/start-local.sh
+
+      - name: Check the local Compose profile
+        run: |
+          export COMPOSE_FILE=docker-compose.example.yml
+          unset ZEROGRAVITY_BACKEND
+          if ZEROGRAVITY_API_KEY='' docker compose --env-file /dev/null config --quiet; then
+            echo "::error::Compose accepted an empty API key"
+            exit 1
+          fi
+          ZEROGRAVITY_API_KEY=fixture docker compose --env-file /dev/null config --format json |
+            jq -e '.services.zerogravity as $s |
+              ($s.build.args.ANTIGRAVITY_BACKEND == "1.18.3") and
+              ($s.image == "zerogravity:v1.4.2-local") and
+              ($s.ports | length == 1) and
+              ($s.ports[0] | .host_ip == "127.0.0.1" and .target == 8741) and
+              ($s.volumes | any(.target == "/run/secrets/zerogravity/accounts.json" and
+                .read_only == true and .bind.create_host_path != true)) and
+              ($s.volumes | any(.type == "tmpfs" and .target == "/run/zerogravity" and
+                .tmpfs.mode == 448))'
+
+      - name: Exercise API diagnostics against local fixtures
+        run: python3 -m unittest discover -s tests -v
+
+  image-smoke:
+    if: github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        backend: ["1.18.3", "1.20.6"]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned distribution
+        run: docker build --build-arg ANTIGRAVITY_BACKEND=${{ matrix.backend }} -t zerogravity:smoke .
+      - name: Check local API and account loading with networking disabled
+        run: sh tests/image-smoke.sh zerogravity:smoke

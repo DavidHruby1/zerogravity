@@ -2,13 +2,13 @@
 
 - **Status**: Active
 - **Last validated**: 2026-03-03
-- **Related docs**: [`README.md`](README.md), [`docker.md`](docker.md), [`api.md`](api.md), [`../index.md`](../index.md)
+- **Related docs**: [`README.md`](README.md), [`docker.md`](docker.md), [`api.md`](api.md), [`index.md`](index.md)
 
 `zg` is a standalone CLI tool that works on **any OS** (Linux, macOS, Windows). The proxy itself runs on Linux/Docker only.
 
 ## Installation
 
-Download the latest binary from the [releases page](https://github.com/NikkeTryHard/zerogravity/releases) for your platform, or use:
+Use the [v1.4.2 release](https://github.com/NikkeTryHard/zerogravity/releases/tag/v1.4.2) for a host CLI matching this distribution. The following upstream command updates to the latest published binary:
 
 ```bash
 zg update
@@ -33,6 +33,8 @@ These work on any OS without a running proxy.
 | `zg docker-init`             | Generate docker-compose.yml + accounts.json template  |
 | `zg rebuild`                 | Rebuild host binary + Docker image and restart daemon |
 | `zg update`                  | Download latest zg binary from GitHub                 |
+
+The upstream `zg docker-init` template is embedded in the CLI. Use the checked-in [Compose example](../docker-compose.example.yml) for this fork’s single-account settings.
 
 ### Model Aliases
 

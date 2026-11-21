@@ -1,14 +1,45 @@
 services:
   zerogravity:
-    image: ghcr.io/nikketryhard/zerogravity:latest
+    build:
+      context: .
+      args:
+        ANTIGRAVITY_BACKEND: "${ZEROGRAVITY_BACKEND:-1.18.3}"
+    image: "zerogravity:v1.4.2-${ZEROGRAVITY_BACKEND:-local}"
+    pull_policy: never
     restart: unless-stopped
     ports:
-      - "8741:8741"
-      - "443:443"
+      - "127.0.0.1:8741:8741"
     volumes:
-      # Mount accounts.json for multi-account rotation
-      - ./accounts.json:/root/.config/zerogravity/accounts.json:ro
+      - type: bind
+        source: ./accounts.json
+        target: /run/secrets/zerogravity/accounts.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: tmpfs
+        target: /run/zerogravity
+        tmpfs:
+          mode: 0700
+      - type: bind
+        source: ./scripts/start-local.sh
+        target: /usr/local/libexec/zerogravity/start-local.sh
+        read_only: true
+        bind:
+          create_host_path: false
+    entrypoint: ["/bin/sh", "/usr/local/libexec/zerogravity/start-local.sh"]
+    command: ["--headless", "--host", "0.0.0.0", "--mitm-port", "443"]
     environment:
-      - ZEROGRAVITY_API_KEY=${ZEROGRAVITY_API_KEY:-}
-      - ZEROGRAVITY_UPSTREAM_PROXY=${ZEROGRAVITY_UPSTREAM_PROXY:-}
-      - RUST_LOG=info
+      ZEROGRAVITY_API_KEY: "${ZEROGRAVITY_API_KEY:?Set a local API key in .env or the shell environment}"
+      ZEROGRAVITY_QUOTA_CAP: "0"
+      ZEROGRAVITY_QUEUE_ENABLED: "true"
+      ZEROGRAVITY_QUEUE_CONCURRENCY: "1"
+      ZEROGRAVITY_QUEUE_INTERVAL_MS: "500"
+      ZEROGRAVITY_QUEUE_TIMEOUT_MS: "30000"
+      ZEROGRAVITY_QUEUE_MAX_SIZE: "4"
+      RUST_LOG: warn
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8741/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
